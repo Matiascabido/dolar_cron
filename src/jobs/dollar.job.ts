@@ -1,44 +1,74 @@
-import cron from "node-cron";
 import { getAllDollars, normalize } from "../services/dollar.service";
 import { sendTelegram } from "../services/notification.service";
 import { alertConfig } from "../config/alert.config";
-import { shouldAlert, canSendAlert, getBestPrice } from "../utils/alert.util";
+import {
+  shouldAlert,
+  canSendAlert,
+  getBestPrice
+} from "../utils/alert.util";
 import { saveLog } from "../storage/logger";
 
-export function startDollarJob() {
-  cron.schedule("*/5 * * * *", async () => {
-    try {
-      const data = await getAllDollars();
-      const normalized = normalize(data);
+async function runCycle() {
+  console.log("🔄 Ejecutando ciclo:", new Date().toLocaleString());
 
-      // guardar histórico
-      normalized.forEach(d => saveLog(d));
+  try {
+    const data = await getAllDollars();
+    console.log("📡 Datos crudos:", JSON.stringify(data, null, 2));
 
-      // log consola
-      console.log("💵 Valores actuales:");
-      normalized.forEach(d => {
-        console.log(`${d.source}: ${d.venta}`);
-      });
+    const normalized = normalize(data);
+    console.log("📊 Datos normalizados:", normalized);
 
-      // mejor precio
-      const best = getBestPrice(normalized);
-
-      // alerta por rango
-      if (shouldAlert(best.venta, alertConfig.min, alertConfig.max)) {
-        if (canSendAlert(alertConfig.cooldownMs)) {
-          await sendTelegram(
-            `🚨 ALERTA DÓLAR
-
-            💰 Mejor precio: ${best.venta}
-            🏦 Fuente: ${best.source}
-            📊 Rango: ${alertConfig.min} - ${alertConfig.max}
-            ⏰ ${new Date().toLocaleString()}`
-          );
-        }
-      }
-
-    } catch (error) {
-      console.error("❌ Error en cron:", error);
+    if (!normalized.length) {
+      console.log("⚠️ No hay datos válidos");
+      return;
     }
-  });
+
+    normalized.forEach(d => saveLog(d));
+
+    console.log("💵 Valores:");
+    normalized.forEach(d => console.log(`${d.source}: ${d.venta}`));
+
+    const best = getBestPrice(normalized);
+    console.log("🏆 Mejor precio:", best);
+
+    const should = shouldAlert(
+      best.venta,
+      alertConfig.min,
+      alertConfig.max
+    );
+
+    console.log("🚨 ¿Dispara alerta?", should);
+
+    if (should) {
+      const canSend = canSendAlert(alertConfig.cooldownMs);
+      console.log("⏱️ ¿Puede enviar?", canSend);
+
+      if (canSend) {
+        console.log("📲 Enviando Telegram...");
+
+        await sendTelegram(
+`🚨 ALERTA DÓLAR
+
+💰 ${best.venta}
+🏦 ${best.source}
+📊 ${alertConfig.min}-${alertConfig.max}`
+        );
+
+        console.log("✅ Telegram enviado");
+      }
+    }
+
+  } catch (error: any) {
+    console.error("❌ Error en ciclo:", error?.response?.data || error.message);
+  }
+}
+
+export function startDollarJob() {
+  console.log("⏱️ Job iniciado");
+
+  // 👇 EJECUCIÓN INMEDIATA
+  runCycle();
+
+  // 👇 EJECUCIÓN CADA 5 MIN
+  setInterval(runCycle, 5 * 60 * 1000);
 }
