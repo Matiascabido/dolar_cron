@@ -1,0 +1,33 @@
+{
+  "name": "dolar_cron",
+  "version": "1.0.0",
+  "description": "dolar-alert/ │ ├── src/ │   ├── config/ │   │   └── alert.config.ts │   ├── services/ │   │   ├── dollar.service.ts │   │   └── notification.service.ts │   ├── jobs/ │   │   └── dollar.job.ts │   ├── app.ts │   └── server.ts │ ├── .env ├── package.json └── tsconfig.json",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Matiascabido/dolar_cron.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Matiascabido/dolar_cron/issues"
+  },
+  "homepage": "https://github.com/Matiascabido/dolar_cron#readme",
+  "dependencies": {
+    "axios": "^1.15.0",
+    "dotenv": "^17.4.1",
+    "fastify": "^5.8.4",
+    "node-cron": "^4.2.1",
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
