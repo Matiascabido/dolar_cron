@@ -2,60 +2,74 @@ import { getAllDollars, normalize } from "../services/dollar.service";
 import { sendTelegram } from "../services/notification.service";
 import { getBestPrice } from "../utils/alert.util";
 import { saveLog } from "../storage/logger";
+import { alertConfig } from "../config/alert.config";
+
+let lastAlert = 0;
 
 async function runCycle() {
   console.log("🔄 Ejecutando ciclo:", new Date().toLocaleString());
 
   try {
-    // 1. Obtener datos
     const data = await getAllDollars();
-    console.log("📡 Datos crudos:", JSON.stringify(data, null, 2));
-
-    // 2. Normalizar
     const normalized = normalize(data);
+
     console.log("📊 Normalizados:", normalized);
 
     if (!normalized.length) {
-      console.log("⚠️ No hay datos");
+      console.log("⚠️ Sin datos");
       return;
     }
 
-    // 3. Guardar logs
+    // 📝 Guardar logs SIEMPRE
     normalized.forEach(d => saveLog(d));
 
-    // 4. Mejor precio
     const best = getBestPrice(normalized);
     console.log("🏆 Mejor precio:", best);
 
-    // 5. 🚨 SIEMPRE enviar Telegram
-    console.log("📲 Enviando Telegram...");
+    const isInRange =
+      best.venta >= alertConfig.min && best.venta <= alertConfig.max;
+
+    console.log("🎯 Rango:", alertConfig.min, "-", alertConfig.max);
+    console.log("📊 ¿Está dentro del rango?", isInRange);
+
+    // ❌ Si está fuera → no notifica
+    if (!isInRange) {
+      console.log("⛔ Fuera del rango, no se notifica");
+      return;
+    }
+
+    // ⏱️ Control de cooldown
+    const now = Date.now();
+
+    if (now - lastAlert < alertConfig.cooldownMs) {
+      console.log("⏳ En cooldown, no se envía alerta");
+      return;
+    }
+
+    lastAlert = now;
+
+    console.log("📲 Enviando notificación (dentro de rango)...");
 
     await sendTelegram(
-`📊 UPDATE DÓLAR
+`📊 DÓLAR EN RANGO
 
-💰 Mejor precio: ${best.venta}
+💰 Precio: ${best.venta}
 🏦 Fuente: ${best.source}
 
-📋 Todas las fuentes:
-${normalized.map(d => `- ${d.source}: ${d.venta}`).join("\n")}
-
+📊 Rango: ${alertConfig.min} - ${alertConfig.max}
 ⏰ ${new Date().toLocaleString()}`
     );
 
-    console.log("✅ Mensaje enviado");
+    console.log("✅ Notificación enviada");
 
   } catch (error: any) {
-    console.error("❌ Error en ciclo:");
-    console.error(error?.response?.data || error.message || error);
+    console.error("❌ Error:", error?.response?.data || error.message);
   }
 }
 
 export function startDollarJob() {
   console.log("⏱️ Job iniciado");
 
-  // ✅ Ejecuta inmediatamente
-  runCycle();
-
-  // ✅ Ejecuta cada 5 minutos
+  runCycle(); // ejecución inmediata
   setInterval(runCycle, 5 * 60 * 1000);
 }
