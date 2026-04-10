@@ -8,11 +8,15 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir);
 }
 
-export function saveLog(data: any) {
+export function saveLog(data: { source: string; venta: number }) {
   const line = JSON.stringify({
     timestamp: new Date().toISOString(),
     ...data
   });
 
-  fs.appendFileSync(logFile, line + "\n");
+  try {
+    fs.appendFileSync(logFile, line + "\n");
+  } catch (err) {
+    console.error("No se pudo escribir el log:", err);
+  }
 }

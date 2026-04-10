@@ -1,17 +1,32 @@
-import dotenv from "dotenv";
-import { startDollarJob } from "./jobs/dollar.job";
-import http from "http";
+import "./env";
+import { buildApp } from "./app";
+import { startDollarJob, stopDollarJob } from "./jobs/dollar.job";
 
-dotenv.config();
+const PORT = Number(process.env.PORT) || 3000;
 
-const PORT = process.env.PORT || 3000;
+const app = buildApp();
 
-// 👇 IMPORTANTE: iniciar el job
-startDollarJob();
+async function main() {
+  await app.listen({ port: PORT, host: "0.0.0.0" });
+  app.log.info(`Servidor en puerto ${PORT}`);
+  startDollarJob();
 
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("OK");
-}).listen(PORT, () => {
-  console.log(`🌐 Server activo en puerto ${PORT}`);
+  const shutdown = async (signal: string) => {
+    app.log.info({ signal }, "Cerrando");
+    stopDollarJob();
+    await app.close();
+    process.exit(0);
+  };
+
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+}
+
+main().catch((err: unknown) => {
+  console.error(err);
+  process.exit(1);
 });

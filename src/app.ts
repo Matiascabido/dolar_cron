@@ -9,5 +9,9 @@ export function buildApp() {
     return { status: "ok" };
   });
 
+  app.get("/", async () => {
+    return "OK";
+  });
+
   return app;
 }
