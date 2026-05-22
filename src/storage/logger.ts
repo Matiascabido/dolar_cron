@@ -8,7 +8,7 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir);
 }
 
-export function saveLog(data: { source: string; venta: number }) {
+export function saveLog(data: { source: string; compra?: number; venta: number }) {
   const line = JSON.stringify({
     timestamp: new Date().toISOString(),
     ...data
@@ -17,6 +17,6 @@ export function saveLog(data: { source: string; venta: number }) {
   try {
     fs.appendFileSync(logFile, line + "\n");
   } catch (err) {
-    console.error("No se pudo escribir el log:", err);
+    console.error("  ✗ No se pudo guardar el historial en disco:", err);
   }
 }

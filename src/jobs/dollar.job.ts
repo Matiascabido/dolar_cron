@@ -1,79 +1,168 @@
 import axios from "axios";
 import { schedule, validate } from "node-cron";
 import type { ScheduledTask } from "node-cron";
-import { getAllDollars, normalize } from "../services/dollar.service";
+import {
+  getOfficialDollars,
+  getTradeableQuotes
+} from "../services/dollar.service";
 import { sendTelegram } from "../services/notification.service";
 import { getBestPrice } from "../utils/alert.util";
 import { saveLog } from "../storage/logger";
-import { alertConfig } from "../config/alert.config";
+import { alertConfig, getPriceRange } from "../config/alert.config";
+import { formatArs, formatPercentChange } from "../utils/format.util";
+import {
+  logCycleEnd,
+  logCycleStart,
+  logError,
+  logInfo,
+  logQuoteLine,
+  logSkip,
+  logSuccess,
+  logWarn
+} from "../utils/log.util";
+import { buildRangeAlertMessage } from "../utils/telegram-message.util";
 
-/** Mejor `venta` del ciclo anterior (todas las lecturas, esté o no en rango). */
+/** Mejor venta oficial del ciclo anterior (todas las lecturas, esté o no en rango). */
 let lastCycleBestVenta: number | null = null;
 let scheduledTask: ScheduledTask | null = null;
+let isRunning = false;
+
+export type DollarJobRunResult =
+  | { executed: true }
+  | { executed: false; reason: "already_running" };
 
 async function runCycle() {
-  console.log("Ejecutando ciclo:", new Date().toLocaleString());
+  logCycleStart();
 
   try {
-    const data = await getAllDollars();
-    const normalized = normalize(data);
+    const { quotes, fetchErrors } = await getOfficialDollars();
 
-    console.log("Normalizados:", normalized);
+    if (fetchErrors.length) {
+      logWarn(
+        `Fuentes no disponibles: ${fetchErrors.join(", ")}. Se continúa con las restantes.`
+      );
+    }
 
-    if (!normalized.length) {
-      console.log("Sin datos");
+    if (!quotes.length) {
+      logError("No se obtuvo el dólar oficial de ninguna fuente.");
+      logCycleEnd();
       return;
     }
 
-    normalized.forEach((d) => saveLog(d));
+    quotes.forEach((d) => saveLog(d));
 
-    const best = getBestPrice(normalized);
-    console.log("Mejor precio:", best);
+    const tradeableQuotes = getTradeableQuotes(quotes);
 
-    const isInRange =
-      best.venta >= alertConfig.min && best.venta <= alertConfig.max;
+    if (!tradeableQuotes.length) {
+      logError("No hay cotizaciones de venta oficiales para evaluar alertas.");
+      logCycleEnd();
+      return;
+    }
 
+    const best = getBestPrice(tradeableQuotes);
+    const { min, max } = getPriceRange();
+    const isInRange = best.venta >= min && best.venta <= max;
     const priceChangedSinceLastCycle =
       lastCycleBestVenta !== null && best.venta !== lastCycleBestVenta;
 
-    console.log("Rango:", alertConfig.min, "-", alertConfig.max);
-    console.log("¿Está dentro del rango?", isInRange);
-    console.log("¿Cambió el mejor precio respecto al ciclo anterior?", priceChangedSinceLastCycle);
+    logInfo(`Dólar oficial · ${quotes.length} fuentes consultadas:`);
 
-    if (isInRange && priceChangedSinceLastCycle) {
-      console.log("Enviando notificación (cambio de precio y en rango)...");
-
-      const sent = await sendTelegram(
-        `DÓLAR EN RANGO
-
-Precio: ${best.venta}
-Fuente: ${best.source}
-
-Rango: ${alertConfig.min} - ${alertConfig.max}
-${new Date().toLocaleString()}`
+    const sorted = [...quotes].sort((a, b) => a.venta - b.venta);
+    for (const quote of sorted) {
+      logQuoteLine(
+        quote.label,
+        quote.venta,
+        !quote.isReference && quote.source === best.source
       );
+    }
+
+    console.log("");
+    logInfo(`Mejor venta oficial: ${formatArs(best.venta)} (${best.label})`);
+    logInfo(`Rango de alerta: ${formatArs(min)} – ${formatArs(max)}`);
+
+    if (isInRange) {
+      logSuccess("El dólar oficial está dentro del rango configurado.");
+    } else if (best.venta < min) {
+      logSkip(
+        `Por debajo del mínimo (faltan ${formatArs(min - best.venta)} para entrar en rango).`
+      );
+    } else {
+      logSkip(
+        `Por encima del máximo (excede en ${formatArs(best.venta - max)}).`
+      );
+    }
+
+    if (lastCycleBestVenta !== null) {
+      const variation = formatPercentChange(lastCycleBestVenta, best.venta);
+
+      if (priceChangedSinceLastCycle) {
+        logInfo(
+          `Variación: ${formatArs(lastCycleBestVenta)} → ${formatArs(best.venta)} · ${variation.text}`
+        );
+      } else {
+        logSkip(`Sin cambios respecto al ciclo anterior (${variation.text}).`);
+      }
+    }
+
+    if (
+      isInRange &&
+      priceChangedSinceLastCycle &&
+      lastCycleBestVenta !== null
+    ) {
+      logInfo("Enviando alerta por Telegram...");
+
+      const message = buildRangeAlertMessage({
+        best,
+        quotes,
+        min,
+        max,
+        previousBest: lastCycleBestVenta
+      });
+
+      const sent = await sendTelegram(message);
 
       if (sent) {
-        console.log("Notificación enviada");
+        logSuccess("Alerta enviada por Telegram.");
+      } else {
+        logWarn(
+          "No se pudo enviar la alerta (revisá TELEGRAM_TOKEN y TELEGRAM_CHAT_ID)."
+        );
       }
     } else if (isInRange && !priceChangedSinceLastCycle) {
-      console.log("Precio sin cambios respecto al ciclo anterior, no se notifica");
+      logSkip("Precio estable en rango — no se envía alerta duplicada.");
     } else if (!isInRange) {
-      console.log("Fuera del rango, no se notifica");
+      logSkip("Fuera de rango — no corresponde alerta.");
     }
 
     lastCycleBestVenta = best.venta;
   } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
-      console.error(
-        "Error HTTP:",
+      logError(
+        "Error al consultar cotizaciones",
         error.response?.data ?? error.message
       );
     } else if (error instanceof Error) {
-      console.error("Error:", error.message);
+      logError("Error inesperado", error.message);
     } else {
-      console.error("Error desconocido:", error);
+      logError("Error desconocido", error);
     }
+  }
+
+  logCycleEnd();
+}
+
+export async function runDollarJob(): Promise<DollarJobRunResult> {
+  if (isRunning) {
+    logSkip("Ciclo omitido: ya hay una consulta en curso.");
+    return { executed: false, reason: "already_running" };
+  }
+
+  isRunning = true;
+  try {
+    await runCycle();
+    return { executed: true };
+  } finally {
+    isRunning = false;
   }
 }
 
@@ -86,18 +175,15 @@ export function startDollarJob() {
   }
 
   console.log(
-    "Job iniciado (cron:",
-    expression,
-    "tz:",
-    alertConfig.cronTimezone + ")"
+    `Monitor de dólar oficial activo · cron: ${expression} · zona horaria: ${alertConfig.cronTimezone}`
   );
 
-  void runCycle();
+  void runDollarJob();
 
   scheduledTask = schedule(
     expression,
     () => {
-      void runCycle();
+      void runDollarJob();
     },
     { timezone: alertConfig.cronTimezone, noOverlap: true }
   );
@@ -106,4 +192,5 @@ export function startDollarJob() {
 export function stopDollarJob() {
   scheduledTask?.stop();
   scheduledTask = null;
+  console.log("Monitor de dólar oficial detenido.");
 }
